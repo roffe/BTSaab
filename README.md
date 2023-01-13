@@ -3,17 +3,16 @@
 Requires ESP-IDF v4.4.3, ESP32-A2DP does not work out of the box with 5.0.0
 
 ## ESP32
-Built using 
-ESP32-WROOM-32 DEVELOPMENT BOARD WIFI + BLUETOOTH 2 + 1 DUAL-CORE WROOM ESP32
+Built using ESP32-WROOM-32 Devkit
 
 ![ESP32-WROOM](esp32-wroom.jpg)
+Chip is ESP32-D0WD-V3 (revision 3)
 
 ## Wiring
 
 ### PCM1502A module
 
-![PCM5102A DAC SOUND CARD BOARD PHAT 3.5MM STEREO JACK 24 BITS
-199,00 kr](i2s.jpg)
+![PCM5102A DAC SOUND CARD BOARD PHAT 3.5MM STEREO JACK 24 BITS 199,00 kr](i2s.jpg)
 
 | From | To  |
 | ---- | --- |
