@@ -1,0 +1,36 @@
+{
+    "idf.adapterTargetName": "esp32",
+    "idf.flashType": "UART",
+    "idf.portWin": "COM4",
+    "idf.openOcdConfigs": [
+        "board/esp32-bridge.cfg"
+    ],
+    "C_Cpp.intelliSenseEngineFallback": "enabled",
+    "C_Cpp.default.includePath": [
+        "C:\\esp\\frameworks\\esp-idf-v4.4.3\\components",
+        "${workspaceFolder}\\components\\**"
+    ],
+    "idf.espIdfPathWin": "c:\\esp\\frameworks\\esp-idf-v4.4.3",
+    "files.associations": {
+        "*.vue": "vue",
+        "*.rmd": "markdown",
+        "*.tmpl": "gohtml",
+        "array": "cpp",
+        "*.tcc": "cpp",
+        "bitset": "cpp",
+        "string": "cpp",
+        "vector": "cpp",
+        "string_view": "cpp",
+        "functional": "cpp",
+        "iomanip": "cpp",
+        "istream": "cpp",
+        "limits": "cpp",
+        "ostream": "cpp",
+        "ratio": "cpp",
+        "sstream": "cpp",
+        "streambuf": "cpp",
+        "regex": "cpp",
+        "*.ipp": "cpp",
+        "*.inc": "cpp"
+    }
+}
