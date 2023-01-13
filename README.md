@@ -2,6 +2,14 @@
 
 Requires ESP-IDF v4.4.3, ESP32-A2DP does not work out of the box with 5.0.0
 
+## Inspiration
+
+https://github.com/leighleighleigh/saab-93NG-bluetooth-aux
+http://bluesaab-forum.90.s1.nabble.com/
+
+TrionicTuning forum: https://www.trionictuning.com/
+
+
 ## ESP32
 Built using ESP32-WROOM-32 Devkit
 
