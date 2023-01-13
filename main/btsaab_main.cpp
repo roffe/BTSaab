@@ -8,12 +8,16 @@
 #include "esp_a2dp_api.h"
 #include "btsaab.h"
 
-gpio_num_t MUTE_PIN = GPIO_NUM_32;
 gpio_num_t CAN_MOSI = GPIO_NUM_23;
 gpio_num_t CAN_MISO = GPIO_NUM_19;
 gpio_num_t CAN_SCLK = GPIO_NUM_18;
 gpio_num_t CAN_CS = GPIO_NUM_5;
 gpio_num_t CAN_INT = GPIO_NUM_34;
+
+gpio_num_t MUTE_PIN = GPIO_NUM_32;
+gpio_num_t I2S_BCK = GPIO_NUM_26;
+gpio_num_t I2S_WS = GPIO_NUM_25;
+gpio_num_t I2S_DOUT = GPIO_NUM_22;
 
 uint8_t startVolume = 100; // 0 - 127
 
@@ -217,7 +221,6 @@ void setupCAN()
     assert(ret == ESP_OK);
     mcp2515.reset();
     mcp2515.setBitrate(CAN_47KBPS, MCP_8MHZ);
-    mcp2515.setConfigMode();
     mcp2515.setFilterMask(MCP2515::MASK0, false, 0x7FF);
     mcp2515.setFilterMask(MCP2515::MASK1, false, 0x7FF);
     mcp2515.setFilter(MCP2515::RXF0, false, 0x290); // buttons
@@ -230,6 +233,14 @@ void setupCAN()
 void setupAudio()
 {
     esp_bredr_tx_power_set(ESP_PWR_LVL_P9, ESP_PWR_LVL_P9); // +9dBm
+
+    i2s_pin_config_t i2s_pin_config = {
+        .bck_io_num = I2S_BCK,
+        .ws_io_num = I2S_WS,
+        .data_out_num = I2S_DOUT,
+        .data_in_num = I2S_PIN_NO_CHANGE,
+    };
+    a2dp_sink.set_pin_config(i2s_pin_config);
 
     static i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
@@ -245,13 +256,15 @@ void setupAudio()
     };
     a2dp_sink.set_i2s_config(i2s_config);
 
+    a2dp_sink.set_avrc_metadata_attribute_mask(ESP_AVRC_MD_ATTR_TITLE | ESP_AVRC_MD_ATTR_ARTIST | ESP_AVRC_MD_ATTR_PLAYING_TIME);
     a2dp_sink.set_avrc_metadata_callback(avrc_metadata_callback);
+
     a2dp_sink.set_on_audio_state_changed(audio_state_callback);
     a2dp_sink.set_on_connection_state_changed(connection_state_callback);
-    a2dp_sink.set_avrc_metadata_attribute_mask(ESP_AVRC_MD_ATTR_TITLE | ESP_AVRC_MD_ATTR_ARTIST | ESP_AVRC_MD_ATTR_PLAYING_TIME);
 
     a2dp_sink.set_auto_reconnect(3);
     a2dp_sink.set_volume(startVolume);
+
     a2dp_sink.start("BTSaab 🎵🎵🎵");
 }
 
