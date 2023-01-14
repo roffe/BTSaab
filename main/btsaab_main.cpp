@@ -29,7 +29,8 @@ spi_device_handle_t spi;
 BluetoothA2DPSink a2dp_sink;
 MCP2515 mcp2515(&spi);
 
-xQueueHandle interputQueue = xQueueCreate(5, sizeof(int));
+xQueueHandle interruptQueue = xQueueCreate(5, sizeof(int));
+xQueueHandle sendQueue = xQueueCreate(10, sizeof(can_frame));
 
 char currentTitle[64 + 1];
 char currentArtist[64 + 1];
@@ -42,52 +43,32 @@ extern "C" void app_main(void)
 {
     setupCAN();
     setupAudio();
-    xTaskCreate(CAN_Control_Task, "CAN_Control_Task", 2048, NULL, 1, NULL);
+    xTaskCreatePinnedToCore(CAN_Control_Task, "CAN_Control_Task", 2048, NULL, 1, NULL, 1);
     xTaskCreate(SIDControl, "SID Controller", 2048, NULL, 1, NULL);
 }
 
-char displayBuffer[64 + 1];
 uint8_t disp_rotate = 0;
+static char displayBuffer[64 + 1];
+static char onscreen[25 + 1];
 volatile bool firstDisplay = true;
 
 void CAN_Control_Task(void *params)
 {
     int pinNumber = 0;
+    can_frame frame;
     while (true)
     {
-        if (xQueueReceive(interputQueue, &pinNumber, portMAX_DELAY))
+        if (xQueueReceive(sendQueue, &frame, 1) == pdTRUE)
         {
-            if (pinNumber == 666)
+            if (mcp2515.sendMessage(&frame) != MCP2515::ERROR_OK)
             {
-                if (firstDisplay)
-                {
-                    requestAccess();
-                    firstDisplay = false;
-                }
-
-                struct can_frame frame = {
-                    .can_id = 0x4A0,
-                    .can_dlc = 7,
-                    .data = {0x0F, 0x37, 0x00, 0x20, 0x14, 0x95, 0x00},
-                };
-                mcp2515.sendMessage(&frame);
-
-                uint8_t dispLen = snprintf(displayBuffer, 64, "%s - %s  ", currentArtist, currentTitle);
-                if (dispLen > 25)
-                {
-                    rotateStringLeft(displayBuffer, disp_rotate++);
-                    if (disp_rotate > dispLen)
-                    {
-                        disp_rotate = 0;
-                    }
-                }
-
-                char onscreen[25 + 1];
-                snprintf(onscreen, 25, "%-30s", displayBuffer);
-
-                setRadioText(onscreen);
+                printf("Error sending frame\n");
             }
-            else if (pinNumber == 34)
+        }
+
+        if (xQueueReceive(interruptQueue, &pinNumber, 1) == pdTRUE) // 1000 portMAX_DELAY
+        {
+            if (pinNumber == 34)
             {
                 uint8_t irq = mcp2515.getInterrupts();
                 mcp2515.clearInterrupts();
@@ -113,6 +94,21 @@ void CAN_Control_Task(void *params)
                     mcp2515.clearERRIF();
                     mcp2515.clearMERR();
                 }
+
+                /*
+                    if (irq & MCP2515::CANINTF_TX0IF)
+                    {
+                        printf("TX0IF\n");
+                    }
+                    if (irq & MCP2515::CANINTF_TX1IF)
+                    {
+                        printf("TX1IF\n");
+                    }
+                    if (irq & MCP2515::CANINTF_TX2IF)
+                    {
+                        printf("TX2IF\n");
+                    }
+                */
             }
         }
     }
@@ -122,21 +118,38 @@ void SIDControl(void *params)
 {
     while (true)
     {
-        // printf("%s - %s\n", currentArtist, currentTitle);
-
         if (connectionState == ESP_A2D_CONNECTION_STATE_CONNECTED)
         {
-            int interupt = 666;
-            xQueueSendToFront(interputQueue, &interupt, 1000);
+            if (firstDisplay)
+            {
+                requestAccess();
+                firstDisplay = false;
+            }
+
+            uint8_t dispLen = snprintf(displayBuffer, 64, "%s - %s  ", currentArtist, currentTitle);
+            if (dispLen > 25)
+            {
+                rotateStringLeft(displayBuffer, disp_rotate++);
+                if (disp_rotate > dispLen)
+                {
+                    disp_rotate = 0;
+                }
+            }
+            snprintf(onscreen, 25, "%-25s", displayBuffer);
+            setRadioText(onscreen);
+            delay(500);
         }
-        delay(600);
+        else
+        {
+            delay(100);
+        }
     }
 }
 
 static void IRAM_ATTR gpio_interrupt_handler(void *args)
 {
     int pinNumber = (int)args;
-    xQueueSendFromISR(interputQueue, &pinNumber, NULL);
+    xQueueSendFromISR(interruptQueue, &pinNumber, NULL);
 }
 
 void requestAccess()
@@ -147,7 +160,7 @@ void requestAccess()
         .data = {0x11, 0x02, 0x05, 0x19, 0x04, 0x00, 0x00, 0x00},
     };
     mcp2515.sendMessage(&frame);
-    delay(70);
+    delay(40);
 }
 
 void setRadioText(char *text)
@@ -158,9 +171,10 @@ void setRadioText(char *text)
     uint8_t row = 2;
     uint8_t pkgs = floor(charLen / 5);
     int seq = 0x40 + pkgs;
+
     while (seq >= 0)
     {
-        struct can_frame frame = {
+        can_frame frame = {
             .can_id = 0x328,
             .can_dlc = 8,
             .data = {(uint8_t)seq, 0x96, (uint8_t)row},
@@ -177,22 +191,29 @@ void setRadioText(char *text)
             }
         }
 
-        mcp2515.sendMessage(&frame);
+        // mcp2515.sendMessage(&frame);
+        xQueueSend(sendQueue, &frame, 1000);
 
         if (seq & 0x40)
         {
             seq -= 0x40;
         }
         seq--;
-        if (seq > 0)
-        {
-            delay(10);
-        }
     }
 }
 
 void frameHandler(can_frame *f)
 {
+    if (f->can_id == 0x290)
+    {
+        if (f->data[5] == 0xC0)
+        {
+        }
+        if (f->data[5] == 0xA0) // hold CLEAR and - to restart the ESP32
+        {
+            esp_restart();
+        }
+    }
     if (f->can_id == 0x410)
     {
         if (f->data[5] == 0x01) // night panel enabled
@@ -286,8 +307,8 @@ void setupAudio()
         .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
         .intr_alloc_flags = 0, // default interrupt priority
-        .dma_buf_count = 16,
-        .dma_buf_len = 128,
+        .dma_buf_count = 8,
+        .dma_buf_len = 32,
         .use_apll = true,
         .tx_desc_auto_clear = true // avoiding noise in case of data unavailability
     };
@@ -311,7 +332,7 @@ void avrc_metadata_callback(uint8_t id, const uint8_t *value)
     {
         snprintf(currentTitle, 64, "%s", value);
         disp_rotate = 0;
-        replace_utf8_chars(currentTitle);
+        utf8_to_sid(currentTitle);
         // utf_convert(currentTitle, currentTitle, 64);
         return;
     }
@@ -319,7 +340,7 @@ void avrc_metadata_callback(uint8_t id, const uint8_t *value)
     {
         snprintf(currentArtist, 64, "%s", value);
         disp_rotate = 0;
-        replace_utf8_chars(currentArtist);
+        utf8_to_sid(currentArtist);
         // utf_convert(currentArtist, currentArtist, 64);
         return;
     }

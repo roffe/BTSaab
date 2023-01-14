@@ -27,7 +27,7 @@ void framePrint(can_frame *f)
     printf("\n");
 }
 
-void replace_utf8_chars(char *str)
+void utf8_to_sid(char *str)
 {
     int i = 0, j = 0;
     while (str[i])
@@ -40,12 +40,24 @@ void replace_utf8_chars(char *str)
                 str[j] = 0x10;
                 i += 2;
                 break;
+            case 0xA8: // è
+                str[j] = 0xE8;
+                i += 2;
+                break;
             case 0xA9: // é
                 str[j] = 0xE9;
                 i += 2;
                 break;
             case 0x85: // Å
                 str[j] = 0xE1;
+                i += 2;
+                break;
+            case 0x86: // Æ
+                str[j] = 0xE1;
+                i += 2;
+                break;
+            case 0xA1: // á
+                str[j] = 0x0F;
                 i += 2;
                 break;
             case 0xA4: // ä
@@ -64,10 +76,6 @@ void replace_utf8_chars(char *str)
                 str[j] = 0xD7;
                 i += 2;
                 break;
-            case 0x98: // Ø
-                str[j] = 0xD8;
-                i += 2;
-                break;
             case 0xBC: // ü
                 str[j] = 0x13;
                 i += 2;
@@ -78,6 +86,10 @@ void replace_utf8_chars(char *str)
                 break;
             case 0xB8: // ø
                 str[j] = 0xF8;
+                i += 2;
+                break;
+            case 0x98: // Ø
+                str[j] = 0xD8;
                 i += 2;
                 break;
             default:
