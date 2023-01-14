@@ -327,14 +327,14 @@ void avrc_metadata_callback(uint8_t id, const uint8_t *value)
     {
         snprintf(currentTitle, 64, "%s", value);
         disp_rotate = 0;
-        // utf_convert(currentTitle, currentTitle, 64);
+        utf_convert(currentTitle, currentTitle, 64);
         return;
     }
     else if (id == 0x02)
     {
         snprintf(currentArtist, 64, "%s", value);
         disp_rotate = 0;
-        // utf_convert(currentArtist, currentArtist, 64);
+        utf_convert(currentArtist, currentArtist, 64);
         return;
     }
     // printf("AVRC metadata rsp: attribute id 0x%x, %s\n", id, value);
