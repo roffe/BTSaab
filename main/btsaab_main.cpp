@@ -50,22 +50,6 @@ char displayBuffer[64 + 1];
 uint8_t disp_rotate = 0;
 volatile bool firstDisplay = true;
 
-/*
-wchar_t *aa = L'å';
-wchar_t *aA = L'Å';
-wchar_t *ae = L'ä';
-wchar_t *aE = L'Ä';
-wchar_t *oe = L'ö';
-wchar_t *oE = L'Ö';
-
-char na = (char)16;
-char nA = (char)225;
-char ne = (char)17;
-char nE = (char)209;
-char no = (char)18;
-char nO = (char)215;
-*/
-
 void CAN_Control_Task(void *params)
 {
     int pinNumber = 0;
@@ -259,9 +243,9 @@ void setupCAN()
         .mode = 0,
         .duty_cycle_pos = 128, // 50% duty cycle
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
-        .clock_speed_hz = 6000000,
+        .clock_speed_hz = 5000000,
         .spics_io_num = CAN_CS,
-        .queue_size = 3};
+        .queue_size = 7};
     esp_err_t ret;
 
     ret = spi_bus_initialize(HSPI_HOST, &buscfg, 1);
@@ -327,14 +311,16 @@ void avrc_metadata_callback(uint8_t id, const uint8_t *value)
     {
         snprintf(currentTitle, 64, "%s", value);
         disp_rotate = 0;
-        utf_convert(currentTitle, currentTitle, 64);
+        replace_utf8_chars(currentTitle);
+        // utf_convert(currentTitle, currentTitle, 64);
         return;
     }
     else if (id == 0x02)
     {
         snprintf(currentArtist, 64, "%s", value);
         disp_rotate = 0;
-        utf_convert(currentArtist, currentArtist, 64);
+        replace_utf8_chars(currentArtist);
+        // utf_convert(currentArtist, currentArtist, 64);
         return;
     }
     // printf("AVRC metadata rsp: attribute id 0x%x, %s\n", id, value);
