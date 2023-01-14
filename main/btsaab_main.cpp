@@ -6,7 +6,10 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_a2dp_api.h"
+#include "esp_timer.h"
+#include "esp_log.h"
 #include "btsaab.h"
+#include "utf_convert.h"
 
 gpio_num_t CAN_MOSI = GPIO_NUM_23;
 gpio_num_t CAN_MISO = GPIO_NUM_19;
@@ -28,55 +31,128 @@ MCP2515 mcp2515(&spi);
 
 xQueueHandle interputQueue = xQueueCreate(5, sizeof(int));
 
-char currentTitle[128];
-char currentArtist[128];
-esp_a2d_audio_state_t playbackState;
-bool muted = false;
+char currentTitle[64 + 1];
+char currentArtist[64 + 1];
+
+volatile esp_a2d_audio_state_t playbackState;
+volatile esp_a2d_connection_state_t connectionState;
+volatile bool muted = false;
 
 extern "C" void app_main(void)
 {
-    gpio_set_direction(MUTE_PIN, GPIO_MODE_OUTPUT);
-    gpio_pulldown_en(MUTE_PIN);
-    gpio_pullup_dis(MUTE_PIN);
-    gpio_set_level(MUTE_PIN, 1);
-
     setupCAN();
     setupAudio();
+    xTaskCreate(CAN_Control_Task, "CAN_Control_Task", 2048, NULL, 1, NULL);
     xTaskCreate(SIDControl, "SID Controller", 2048, NULL, 1, NULL);
-    int interupt = 666;
-    xQueueSendToFront(interputQueue, &interupt, 100);
+}
+
+char displayBuffer[64 + 1];
+uint8_t disp_rotate = 0;
+volatile bool firstDisplay = true;
+
+/*
+wchar_t *aa = L'å';
+wchar_t *aA = L'Å';
+wchar_t *ae = L'ä';
+wchar_t *aE = L'Ä';
+wchar_t *oe = L'ö';
+wchar_t *oE = L'Ö';
+
+char na = (char)16;
+char nA = (char)225;
+char ne = (char)17;
+char nE = (char)209;
+char no = (char)18;
+char nO = (char)215;
+*/
+
+void CAN_Control_Task(void *params)
+{
+    int pinNumber = 0;
+    while (true)
+    {
+        if (xQueueReceive(interputQueue, &pinNumber, portMAX_DELAY))
+        {
+            if (pinNumber == 666)
+            {
+                if (firstDisplay)
+                {
+                    requestAccess();
+                    firstDisplay = false;
+                }
+
+                struct can_frame frame = {
+                    .can_id = 0x4A0,
+                    .can_dlc = 7,
+                    .data = {0x0F, 0x37, 0x00, 0x20, 0x14, 0x95, 0x00},
+                };
+                mcp2515.sendMessage(&frame);
+
+                uint8_t dispLen = snprintf(displayBuffer, 64, "%s - %s  ", currentArtist, currentTitle);
+                if (dispLen > 25)
+                {
+                    rotateStringLeft(displayBuffer, disp_rotate++);
+                    if (disp_rotate > dispLen)
+                    {
+                        disp_rotate = 0;
+                    }
+                }
+
+                char onscreen[25 + 1];
+                snprintf(onscreen, 25, "%-30s", displayBuffer);
+
+                setRadioText(onscreen);
+            }
+            else if (pinNumber == 34)
+            {
+                uint8_t irq = mcp2515.getInterrupts();
+                mcp2515.clearInterrupts();
+                if (irq & MCP2515::CANINTF_RX0IF)
+                {
+                    struct can_frame frame;
+                    if (mcp2515.readMessage(MCP2515::RXB0, &frame) == MCP2515::ERROR_OK)
+                    {
+                        frameHandler(&frame);
+                    }
+                }
+                if (irq & MCP2515::CANINTF_RX1IF)
+                {
+                    struct can_frame frame;
+                    if (mcp2515.readMessage(MCP2515::RXB1, &frame) == MCP2515::ERROR_OK)
+                    {
+                        frameHandler(&frame);
+                    }
+                }
+                if ((irq & MCP2515::CANINTF_ERRIF) || (irq & MCP2515::CANINTF_MERRF))
+                {
+                    checkErr(mcp2515);
+                    mcp2515.clearERRIF();
+                    mcp2515.clearMERR();
+                }
+            }
+        }
+    }
+}
+
+void SIDControl(void *params)
+{
+    while (true)
+    {
+        // printf("%s - %s\n", currentArtist, currentTitle);
+
+        if (connectionState == ESP_A2D_CONNECTION_STATE_CONNECTED)
+        {
+            int interupt = 666;
+            xQueueSendToFront(interputQueue, &interupt, 1000);
+        }
+        delay(600);
+    }
 }
 
 static void IRAM_ATTR gpio_interrupt_handler(void *args)
 {
     int pinNumber = (int)args;
     xQueueSendFromISR(interputQueue, &pinNumber, NULL);
-}
-
-void frameHandler(can_frame *f)
-{
-    framePrint(f);
-    if (f->can_id == 0x410)
-    {
-        if (f->data[5] == 0x01) // night panel enabled
-        {
-            if (!muted)
-            {
-                printf("mute\n");
-                gpio_set_level(MUTE_PIN, 0);
-                muted = true;
-            }
-        }
-        else if (f->data[5] == 0x00)
-        {
-            if (muted)
-            {
-                printf("unmute\n");
-                gpio_set_level(MUTE_PIN, 1);
-                muted = false;
-            }
-        }
-    }
 }
 
 void requestAccess()
@@ -90,7 +166,7 @@ void requestAccess()
     delay(70);
 }
 
-void setRadioText(const char *text)
+void setRadioText(char *text)
 {
     uint8_t charLen = strlen(text);
     charLen--;
@@ -131,57 +207,30 @@ void setRadioText(const char *text)
     }
 }
 
-void CAN_Control_Task(void *params)
+void frameHandler(can_frame *f)
 {
-
-    int pinNumber = 0;
-    while (true)
+    if (f->can_id == 0x410)
     {
-        if (xQueueReceive(interputQueue, &pinNumber, portMAX_DELAY))
+        if (f->data[5] == 0x01) // night panel enabled
         {
-            if (pinNumber == 666)
+            if (!muted)
             {
-                requestAccess();
-                struct can_frame frame = {
-                    .can_id = 0x4A0,
-                    .can_dlc = 7,
-                    .data = {0x0F, 0x37, 0x00, 0x20, 0x14, 0x95, 0x00},
-                };
-                mcp2515.sendMessage(&frame);
-
-                char buffer[60];
-                sprintf(buffer, "%s - %s\n", currentArtist, currentTitle);
-                setRadioText(buffer);
+                printf("mute\n");
+                gpio_set_level(MUTE_PIN, 0);
+                muted = true;
             }
-            else if (pinNumber == 34)
+        }
+        else if (f->data[5] == 0x00)
+        {
+            if (muted)
             {
-                uint8_t irq = mcp2515.getInterrupts();
-                mcp2515.clearInterrupts();
-                if (irq & MCP2515::CANINTF_RX0IF)
-                {
-                    struct can_frame frame;
-                    if (mcp2515.readMessage(MCP2515::RXB0, &frame) == MCP2515::ERROR_OK)
-                    {
-                        frameHandler(&frame);
-                    }
-                }
-                if (irq & MCP2515::CANINTF_RX1IF)
-                {
-                    struct can_frame frame;
-                    if (mcp2515.readMessage(MCP2515::RXB1, &frame) == MCP2515::ERROR_OK)
-                    {
-                        frameHandler(&frame);
-                    }
-                }
-                if ((irq & MCP2515::CANINTF_ERRIF) || (irq & MCP2515::CANINTF_MERRF))
-                {
-                    checkErr(mcp2515);
-                    mcp2515.clearERRIF();
-                    mcp2515.clearMERR();
-                }
+                printf("unmute\n");
+                gpio_set_level(MUTE_PIN, 1);
+                muted = false;
             }
         }
     }
+    // framePrint(f);
 }
 
 void setupCAN()
@@ -226,12 +275,16 @@ void setupCAN()
     mcp2515.setFilter(MCP2515::RXF0, false, 0x290); // buttons
     mcp2515.setFilter(MCP2515::RXF1, false, 0x410);
     mcp2515.setNormalMode();
-
-    xTaskCreate(CAN_Control_Task, "CAN_Control_Task", 2048, NULL, 1, NULL);
 }
 
 void setupAudio()
 {
+
+    gpio_set_direction(MUTE_PIN, GPIO_MODE_OUTPUT);
+    gpio_pulldown_en(MUTE_PIN);
+    gpio_pullup_dis(MUTE_PIN);
+    gpio_set_level(MUTE_PIN, 1);
+
     esp_bredr_tx_power_set(ESP_PWR_LVL_P9, ESP_PWR_LVL_P9); // +9dBm
 
     i2s_pin_config_t i2s_pin_config = {
@@ -268,37 +321,29 @@ void setupAudio()
     a2dp_sink.start("BTSaab 🎵🎵🎵");
 }
 
-void SIDControl(void *params)
+void avrc_metadata_callback(uint8_t id, const uint8_t *value)
 {
-
-    while (true)
+    if (id == 0x01)
     {
-        // printf("%s - %s\n", currentArtist, currentTitle);
-        int interupt = 666;
-        xQueueGenericSend(interputQueue, &interupt, 100, 1);
-        delay(400);
-    }
-}
-
-void avrc_metadata_callback(uint8_t data1, const uint8_t *data2)
-{
-    if (data1 == 0x01)
-    {
-        sprintf(currentTitle, "%s", data2);
+        snprintf(currentTitle, 64, "%s", value);
+        disp_rotate = 0;
+        // utf_convert(currentTitle, currentTitle, 64);
         return;
     }
-    else if (data1 == 0x02)
+    else if (id == 0x02)
     {
-        sprintf(currentArtist, "%s", data2);
+        snprintf(currentArtist, 64, "%s", value);
+        disp_rotate = 0;
+        // utf_convert(currentArtist, currentArtist, 64);
         return;
     }
-    // printf("AVRC metadata rsp: attribute id 0x%x, %s\n", data1, data2);
+    // printf("AVRC metadata rsp: attribute id 0x%x, %s\n", id, value);
 }
 
 void audio_state_callback(esp_a2d_audio_state_t state, void *data)
 {
     playbackState = state;
-    char stateString[10];
+    char stateString[8];
     switch (state)
     {
     case ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND:
@@ -313,24 +358,25 @@ void audio_state_callback(esp_a2d_audio_state_t state, void *data)
     default:
         break;
     }
-    printf("AVRC play status rsp: %s\n", stateString);
+    printf("Audio %s\n", stateString);
 }
 
 void connection_state_callback(esp_a2d_connection_state_t state, void *p_param)
 {
-    esp_a2d_cb_param_t *a2d = (esp_a2d_cb_param_t *)(p_param);
+    connectionState = state;
+    // esp_a2d_cb_param_t *a2d = (esp_a2d_cb_param_t *)(p_param);
     switch (state)
     {
     case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
         printf("A2DP disconnected\n");
         break;
     case ESP_A2D_CONNECTION_STATE_CONNECTING:
-
         printf("A2DP connecting\n");
         break;
     case ESP_A2D_CONNECTION_STATE_CONNECTED:
         printf("A2DP connected\n");
         a2dp_sink.set_volume(startVolume);
+        firstDisplay = true; // force display update
         break;
     case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
         printf("A2DP disconnecting\n");
