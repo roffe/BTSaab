@@ -1,4 +1,5 @@
 #include <mcp2515.h>
+#include "esp_system.h"
 #include "BluetoothA2DPSink.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -9,7 +10,23 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "btsaab.h"
+#include <pthread.h>
 #include "utf_convert.h"
+
+// the ticks between each SID update
+#define SID_UPDATE_RATE 60
+#define ROTATE_STEPS 2
+
+// For old SID 12, 9-5 2003-2005 24
+#define SCREEN_WIDTH 24
+
+// SPI speed to talk to MCP2515
+#define SPI_MHZ 6
+
+// Buffer sizes
+#define MAX_ARTIST_LENGTH 64
+#define MAX_TITLE_LENGTH 64
+#define SCREEN_BUFFER_LENGTH MAX_ARTIST_LENGTH + MAX_TITLE_LENGTH
 
 gpio_num_t CAN_MOSI = GPIO_NUM_23;
 gpio_num_t CAN_MISO = GPIO_NUM_19;
@@ -17,85 +34,106 @@ gpio_num_t CAN_SCLK = GPIO_NUM_18;
 gpio_num_t CAN_CS = GPIO_NUM_5;
 gpio_num_t CAN_INT = GPIO_NUM_34;
 
-gpio_num_t MUTE_PIN = GPIO_NUM_32;
+gpio_num_t ENABLE_OUTPUT_PIN = GPIO_NUM_32;
 gpio_num_t I2S_BCK = GPIO_NUM_26;
 gpio_num_t I2S_WS = GPIO_NUM_25;
 gpio_num_t I2S_DOUT = GPIO_NUM_22;
 
 uint8_t startVolume = 100; // 0 - 127
 
-spi_device_handle_t spi;
-
 BluetoothA2DPSink a2dp_sink;
+
+pthread_mutex_t canMutex;
+spi_device_handle_t spi;
 MCP2515 mcp2515(&spi);
 
 xQueueHandle interruptQueue = xQueueCreate(5, sizeof(int));
-xQueueHandle sendQueue = xQueueCreate(10, sizeof(can_frame));
 
-char currentTitle[64 + 1];
-char currentArtist[64 + 1];
+char currentTitle[MAX_ARTIST_LENGTH + 1];
+char currentArtist[MAX_TITLE_LENGTH + 1];
 
 volatile esp_a2d_audio_state_t playbackState;
 volatile esp_a2d_connection_state_t connectionState;
 volatile bool muted = false;
+volatile uint8_t disp_rotate = 0;
+
+TaskHandle_t xHandle;
 
 extern "C" void app_main(void)
 {
+    if (pthread_mutex_init(&canMutex, NULL) != 0)
+    {
+        ESP_LOGE("BTSAAB", "Failed to initialize the can mutex");
+    }
+
     setupCAN();
+
+    showWelcome();
+
+    // xTaskCreate(CAN_SEND_Control_Task, "CAN_SEND_Control_Task", 2048, NULL, 1, NULL);
+    xTaskCreate(SIDAudioTextControl, "SID audio text controller", 2048, NULL, 1, NULL);
+    xTaskCreate(SIDControl, "SID audio text generator", 2048, NULL, 1, &xHandle);
+
     setupAudio();
-    xTaskCreatePinnedToCore(CAN_Control_Task, "CAN_Control_Task", 2048, NULL, 1, NULL, 1);
-    xTaskCreate(SIDControl, "SID Controller", 2048, NULL, 1, NULL);
 }
-
-uint8_t disp_rotate = 0;
-static char displayBuffer[64 + 1];
-static char onscreen[25 + 1];
-volatile bool firstDisplay = true;
-
-void CAN_Control_Task(void *params)
+/*
+void CAN_SEND_Control_Task(void *params)
 {
-    int pinNumber = 0;
-    can_frame frame;
     while (true)
     {
-        if (xQueueReceive(sendQueue, &frame, 1) == pdTRUE)
+        can_frame frame;
+        if (xQueueReceive(sendQueue, &frame, 10000) == pdTRUE)
         {
-            if (mcp2515.sendMessage(&frame) != MCP2515::ERROR_OK)
+            if (pthread_mutex_lock(&canMutex) == 0)
             {
-                printf("Error sending frame\n");
+                MCP2515::ERROR err = mcp2515.sendMessage(&frame);
+                if (err != MCP2515::ERROR_OK)
+                {
+                    printf("Error sending frame: %d\n", err);
+                }
+                pthread_mutex_unlock(&canMutex);
             }
+            delay(10);
         }
+    }
+}
+*/
 
-        if (xQueueReceive(interruptQueue, &pinNumber, 1) == pdTRUE) // 1000 portMAX_DELAY
+void CAN_RECV_Control_Task(void *params)
+{
+    int pinNumber = 0;
+    can_frame recv_frame;
+    for (;;)
+    {
+        if (xQueueReceive(interruptQueue, &pinNumber, 10) == pdTRUE)
         {
             if (pinNumber == 34)
             {
-                uint8_t irq = mcp2515.getInterrupts();
-                mcp2515.clearInterrupts();
-                if (irq & MCP2515::CANINTF_RX0IF)
+                if (pthread_mutex_lock(&canMutex) == 0)
                 {
-                    struct can_frame frame;
-                    if (mcp2515.readMessage(MCP2515::RXB0, &frame) == MCP2515::ERROR_OK)
+                    uint8_t irq = mcp2515.getInterrupts();
+                    if (irq & MCP2515::CANINTF_RX0IF)
                     {
-                        frameHandler(&frame);
+                        if (mcp2515.readMessage(MCP2515::RXB0, &recv_frame) == MCP2515::ERROR_OK)
+                        {
+                            frameHandler(&recv_frame);
+                        }
                     }
-                }
-                if (irq & MCP2515::CANINTF_RX1IF)
-                {
-                    struct can_frame frame;
-                    if (mcp2515.readMessage(MCP2515::RXB1, &frame) == MCP2515::ERROR_OK)
+                    if (irq & MCP2515::CANINTF_RX1IF)
                     {
-                        frameHandler(&frame);
+                        if (mcp2515.readMessage(MCP2515::RXB1, &recv_frame) == MCP2515::ERROR_OK)
+                        {
+                            frameHandler(&recv_frame);
+                        }
                     }
-                }
-                if ((irq & MCP2515::CANINTF_ERRIF) || (irq & MCP2515::CANINTF_MERRF))
-                {
-                    checkErr(mcp2515);
-                    mcp2515.clearERRIF();
-                    mcp2515.clearMERR();
-                }
+                    if ((irq & MCP2515::CANINTF_ERRIF) || (irq & MCP2515::CANINTF_MERRF))
+                    {
+                        checkErr(mcp2515);
+                        mcp2515.clearERRIF();
+                        mcp2515.clearMERR();
+                    }
 
-                /*
+                    /*
                     if (irq & MCP2515::CANINTF_TX0IF)
                     {
                         printf("TX0IF\n");
@@ -108,41 +146,93 @@ void CAN_Control_Task(void *params)
                     {
                         printf("TX2IF\n");
                     }
-                */
+                    */
+
+                    pthread_mutex_unlock(&canMutex);
+                }
             }
         }
     }
 }
 
+void SIDAudioTextControl(void *params)
+{
+
+    TickType_t xLastWakeTime;
+    const TickType_t xFrequency = 93;
+    xLastWakeTime = xTaskGetTickCount();
+    for (;;)
+    {
+
+        xTaskDelayUntil(&xLastWakeTime, xFrequency);
+        can_frame frame = {
+            .can_id = 0x348,
+            .can_dlc = 8,
+            .data = {
+                0x11,
+                0x02,
+                (connectionState == ESP_A2D_CONNECTION_STATE_CONNECTED) ? (uint8_t)0x05 : (uint8_t)0xFF,
+                0x19,
+                0x04,
+                0x00,
+                0x00,
+                0x00,
+            },
+        };
+        sendCAN(&frame);
+    }
+}
+
 void SIDControl(void *params)
 {
-    while (true)
+    uint8_t ca, ct;
+    char displayBuffer[SCREEN_BUFFER_LENGTH + 1];
+    char onscreen[SCREEN_WIDTH + 1];
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    for (;;)
     {
-        if (connectionState == ESP_A2D_CONNECTION_STATE_CONNECTED)
+        if (connectionState != ESP_A2D_CONNECTION_STATE_CONNECTED)
         {
-            if (firstDisplay)
-            {
-                requestAccess();
-                firstDisplay = false;
-            }
+            vTaskSuspend(NULL);
+            xLastWakeTime = xTaskGetTickCount();
+            disp_rotate = 0;
+            continue;
+        }
 
-            uint8_t dispLen = snprintf(displayBuffer, 64, "%s - %s  ", currentArtist, currentTitle);
-            if (dispLen > 25)
-            {
-                rotateStringLeft(displayBuffer, disp_rotate++);
-                if (disp_rotate > dispLen)
-                {
-                    disp_rotate = 0;
-                }
-            }
-            snprintf(onscreen, 25, "%-25s", displayBuffer);
-            setRadioText(onscreen);
-            delay(500);
-        }
-        else
+        int bufferPos = 0;
+
+        ca = strlen(currentArtist);
+        memcpy(&displayBuffer[bufferPos], currentArtist, ca);
+        bufferPos += ca;
+
+        displayBuffer[bufferPos++] = ' ';
+        displayBuffer[bufferPos++] = '-';
+        displayBuffer[bufferPos++] = ' ';
+
+        ct = strlen(currentTitle);
+        memcpy(&displayBuffer[bufferPos], currentTitle, ct);
+        bufferPos += ct;
+
+        displayBuffer[bufferPos++] = ' ';
+        displayBuffer[bufferPos++] = ' ';
+        displayBuffer[bufferPos++] = '\0';
+
+        int dispLen = ca + ct + 3;
+
+        if (dispLen > SCREEN_WIDTH)
         {
-            delay(100);
+            rotateStringLeft(displayBuffer, disp_rotate);
+            disp_rotate += ROTATE_STEPS;
+            if (disp_rotate >= dispLen)
+            {
+                disp_rotate = 0;
+            }
         }
+        uint8_t toCopy = (dispLen > SCREEN_WIDTH) ? SCREEN_WIDTH : dispLen;
+        memcpy(onscreen, displayBuffer, toCopy);
+        onscreen[toCopy] = '\0';
+        setRadioText(onscreen);
+        xTaskDelayUntil(&xLastWakeTime, SID_UPDATE_RATE);
     }
 }
 
@@ -152,85 +242,68 @@ static void IRAM_ATTR gpio_interrupt_handler(void *args)
     xQueueSendFromISR(interruptQueue, &pinNumber, NULL);
 }
 
-void requestAccess()
+void sendCAN(can_frame *frame)
 {
-    struct can_frame frame = {
-        .can_id = 0x348,
-        .can_dlc = 8,
-        .data = {0x11, 0x02, 0x05, 0x19, 0x04, 0x00, 0x00, 0x00},
-    };
-    mcp2515.sendMessage(&frame);
-    delay(40);
-}
-
-void setRadioText(char *text)
-{
-    uint8_t charLen = strlen(text);
-    charLen--;
-    uint8_t charPos = 0;
-    uint8_t row = 2;
-    uint8_t pkgs = floor(charLen / 5);
-    int seq = 0x40 + pkgs;
-
-    while (seq >= 0)
+    if (pthread_mutex_lock(&canMutex) == 0)
     {
-        can_frame frame = {
-            .can_id = 0x328,
-            .can_dlc = 8,
-            .data = {(uint8_t)seq, 0x96, (uint8_t)row},
-        };
-        for (size_t i = 3; i < 8; i++)
+        MCP2515::ERROR err = mcp2515.sendMessage(frame);
+        if (err != MCP2515::ERROR_OK)
         {
-            if (charPos < charLen)
-            {
-                frame.data[i] = text[charPos++];
-            }
-            else
-            {
-                frame.data[i] = 0x00;
-            }
+            ESP_LOGE("CanShield", "Error sending frame: %d", err);
         }
-
-        // mcp2515.sendMessage(&frame);
-        xQueueSend(sendQueue, &frame, 1000);
-
-        if (seq & 0x40)
-        {
-            seq -= 0x40;
-        }
-        seq--;
+        pthread_mutex_unlock(&canMutex);
     }
 }
 
-void frameHandler(can_frame *f)
+/*
+290h - Steering wheel and SID buttons
+Message is sent with an interval of 1 second and if a value changes.
+The most significant bit of the first byte (byte 0) is set if information has changed from the last message.
+The audio button information and SID button information are duplicated to bytes 4 and 5.
+
+ID	Byte 0	Byte 1	Byte 2	Byte 3	Byte 4	Byte 5	Byte 6	Byte 7
+290h	STATE	-	AUDIO	SID	AUDIO	SID	-	-
+
+Byte	Bit 7	Bit 6	Bit 5	Bit 4	Bit 3	Bit 2	Bit 1	Bit 0
+STATE	CHANGED	-	-	-	-	-	-	-
+AUDIO	VOL-	VOL+	SRC	SEEK+	SEEK-	NXT	-	-
+SID	CLR	SET	DOWN	UP	NPANEL	CLOCK+	CLOCK-	-
+
+Example message:
+80 00 40 00 40 00 00 00
+
+Information has changed from the last message and the Volume Up audio button has been pressed.
+*/
+
+void frameHandler(can_frame *frame)
 {
-    if (f->can_id == 0x290)
+    if (frame->can_id == 0x290) // Steering wheel and SID buttons
     {
-        if (f->data[5] == 0xC0)
+        if (frame->data[5] == 0xC0) // holding CLEAR and SET
         {
         }
-        if (f->data[5] == 0xA0) // hold CLEAR and - to restart the ESP32
+        if (frame->data[5] == 0xA0) // holding CLEAR and -
         {
-            esp_restart();
+            esp_restart(); // reset the ESP32
         }
     }
-    if (f->can_id == 0x410)
+    if (frame->can_id == 0x410)
     {
-        if (f->data[5] == 0x01) // night panel enabled
+        if (frame->data[5] == 0x01) // night panel enabled
         {
             if (!muted)
             {
                 printf("mute\n");
-                gpio_set_level(MUTE_PIN, 0);
+                gpio_set_level(ENABLE_OUTPUT_PIN, 0);
                 muted = true;
             }
         }
-        else if (f->data[5] == 0x00)
+        else if (frame->data[5] == 0x00)
         {
             if (muted)
             {
                 printf("unmute\n");
-                gpio_set_level(MUTE_PIN, 1);
+                gpio_set_level(ENABLE_OUTPUT_PIN, 1);
                 muted = false;
             }
         }
@@ -240,6 +313,8 @@ void frameHandler(can_frame *f)
 
 void setupCAN()
 {
+    xTaskCreate(CAN_RECV_Control_Task, "CAN receive controller", 2048, NULL, 1, NULL);
+
     gpio_pad_select_gpio(CAN_INT);
     gpio_set_direction(CAN_INT, GPIO_MODE_INPUT);
     gpio_pulldown_en(CAN_INT);
@@ -264,7 +339,7 @@ void setupCAN()
         .mode = 0,
         .duty_cycle_pos = 128, // 50% duty cycle
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
-        .clock_speed_hz = 5000000,
+        .clock_speed_hz = SPI_MHZ * 1000000,
         .spics_io_num = CAN_CS,
         .queue_size = 7};
     esp_err_t ret;
@@ -278,17 +353,17 @@ void setupCAN()
     mcp2515.setFilterMask(MCP2515::MASK0, false, 0x7FF);
     mcp2515.setFilterMask(MCP2515::MASK1, false, 0x7FF);
     mcp2515.setFilter(MCP2515::RXF0, false, 0x290); // buttons
-    mcp2515.setFilter(MCP2515::RXF1, false, 0x410);
+    // mcp2515.setFilter(MCP2515::RXF1, false, 0x410);
     mcp2515.setNormalMode();
 }
 
 void setupAudio()
 {
 
-    gpio_set_direction(MUTE_PIN, GPIO_MODE_OUTPUT);
-    gpio_pulldown_en(MUTE_PIN);
-    gpio_pullup_dis(MUTE_PIN);
-    gpio_set_level(MUTE_PIN, 1);
+    gpio_set_direction(ENABLE_OUTPUT_PIN, GPIO_MODE_OUTPUT);
+    gpio_pulldown_en(ENABLE_OUTPUT_PIN);
+    gpio_pullup_dis(ENABLE_OUTPUT_PIN);
+    gpio_set_level(ENABLE_OUTPUT_PIN, 1);
 
     esp_bredr_tx_power_set(ESP_PWR_LVL_P9, ESP_PWR_LVL_P9); // +9dBm
 
@@ -302,7 +377,7 @@ void setupAudio()
 
     static i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = 48000, // updated automatically by A2DP
+        .sample_rate = 44100, // updated automatically by A2DP
         .bits_per_sample = (i2s_bits_per_sample_t)32,
         .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
@@ -328,23 +403,22 @@ void setupAudio()
 
 void avrc_metadata_callback(uint8_t id, const uint8_t *value)
 {
-    if (id == 0x01)
+    if (id == 0x01) // title
     {
-        snprintf(currentTitle, 64, "%s", value);
-        disp_rotate = 0;
+        snprintf(currentTitle, MAX_TITLE_LENGTH + 1, "%s", value);
         utf8_to_sid(currentTitle);
-        // utf_convert(currentTitle, currentTitle, 64);
+        utf_convert(currentTitle, currentTitle, 64);
         return;
     }
-    else if (id == 0x02)
+    else if (id == 0x02) // artist
     {
-        snprintf(currentArtist, 64, "%s", value);
-        disp_rotate = 0;
+        snprintf(currentArtist, MAX_ARTIST_LENGTH + 1, "%s", value);
         utf8_to_sid(currentArtist);
-        // utf_convert(currentArtist, currentArtist, 64);
+        utf_convert(currentArtist, currentArtist, 64);
+        disp_rotate = 0;
         return;
     }
-    // printf("AVRC metadata rsp: attribute id 0x%x, %s\n", id, value);
+    // printf("AVRC metadata rsp: attribute id 0x%x, %d\n", id, &value);
 }
 
 void audio_state_callback(esp_a2d_audio_state_t state, void *data)
@@ -355,12 +429,15 @@ void audio_state_callback(esp_a2d_audio_state_t state, void *data)
     {
     case ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND:
         strcpy(stateString, "SUSPEND");
+        gpio_set_level(ENABLE_OUTPUT_PIN, 0);
         break;
     case ESP_A2D_AUDIO_STATE_STOPPED:
         strcpy(stateString, "STOPPED");
+        gpio_set_level(ENABLE_OUTPUT_PIN, 0);
         break;
     case ESP_A2D_AUDIO_STATE_STARTED:
         strcpy(stateString, "STARTED");
+        gpio_set_level(ENABLE_OUTPUT_PIN, 1);
         break;
     default:
         break;
@@ -383,54 +460,10 @@ void connection_state_callback(esp_a2d_connection_state_t state, void *p_param)
     case ESP_A2D_CONNECTION_STATE_CONNECTED:
         printf("A2DP connected\n");
         a2dp_sink.set_volume(startVolume);
-        firstDisplay = true; // force display update
+        vTaskResume(xHandle);
         break;
     case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
         printf("A2DP disconnecting\n");
         break;
-    }
-}
-
-void checkErr(MCP2515 mcp2515)
-{
-    uint8_t u8ErrorFlag = mcp2515.getErrorFlags();
-    if (u8ErrorFlag & MCP2515::EFLG_RX1OVR)
-    {
-        printf("CanShield error RX1OVR: receive buffer 1 overflow");
-    }
-
-    // if (u8ErrorFlag & MCP2515::EFLG_RX0OVR)
-    //{
-    //     Serial.println("CanShield error RX0OVR: receive buffer 0 overflow");
-    // }
-
-    if (u8ErrorFlag & MCP2515::EFLG_TXBO)
-    {
-        printf("CanShield error TXBO: bus off\n");
-    }
-
-    if (u8ErrorFlag & MCP2515::EFLG_TXEP)
-    {
-        printf("CanShield error TXEP: transmit error-passive\n");
-    }
-
-    if (u8ErrorFlag & MCP2515::EFLG_RXEP)
-    {
-        printf("CanShield error RXEP: receive error-passive\n");
-    }
-
-    if (u8ErrorFlag & MCP2515::EFLG_TXWAR)
-    {
-        printf("CanShield error TXWAR: transmit error warning\n");
-    }
-
-    if (u8ErrorFlag & MCP2515::EFLG_RXWAR)
-    {
-        printf("CanShield error RXWAR: receive error warning\n");
-    }
-
-    if (u8ErrorFlag & MCP2515::EFLG_EWARN)
-    {
-        printf("CanShield error EWARN: error warning\n");
     }
 }

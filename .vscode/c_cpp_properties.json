@@ -11,13 +11,14 @@
             ],
             "browse": {
                 "path": [
-                    "${config:idf.espIdfPath}/components",
-                    "${config:idf.espIdfPathWin}/components",
+                    "${config:idf.espIdfPath}/components/**",
+                    "${config:idf.espIdfPathWin}/components/**",
                     "${workspaceFolder}"
                 ],
                 "limitSymbolsToIncludedHeaders": false
             },
-            "compilerPath": "C:/Users/flejd/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32-elf/bin/xtensa-esp32-elf-gcc.exe"
+            "compilerPath": "C:/Users/flejd/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32-elf/bin/xtensa-esp32-elf-gcc.exe",
+            "intelliSenseMode": "${default}"
         }
     ],
     "version": 4

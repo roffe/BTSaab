@@ -7,10 +7,11 @@
     ],
     "C_Cpp.intelliSenseEngineFallback": "enabled",
     "C_Cpp.default.includePath": [
-        "C:\\esp\\frameworks\\esp-idf-v4.4.3\\components",
+        "C:\\esp\\frameworks\\esp-idf-v4.4.3\\components\\**",
         "${workspaceFolder}\\components\\**"
     ],
     "idf.espIdfPathWin": "c:\\esp\\frameworks\\esp-idf-v4.4.3",
+    "idf.killMonitorTimeout": 5000,
     "files.associations": {
         "*.vue": "vue",
         "*.rmd": "markdown",
@@ -31,6 +32,11 @@
         "streambuf": "cpp",
         "regex": "cpp",
         "*.ipp": "cpp",
-        "*.inc": "cpp"
-    }
+        "*.inc": "cpp",
+        "cmath": "cpp",
+        "chrono": "cpp",
+        "random": "cpp",
+        "type_traits": "cpp"
+    },
+    "cmake.configureOnOpen": false
 }

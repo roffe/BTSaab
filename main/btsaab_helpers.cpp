@@ -2,6 +2,50 @@
 #include "btsaab.h"
 #include "string.h"
 
+void checkErr(MCP2515 mcp2515)
+{
+    uint8_t u8ErrorFlag = mcp2515.getErrorFlags();
+    if (u8ErrorFlag & MCP2515::EFLG_RX1OVR)
+    {
+        ESP_LOGE("CanShield", "CanShield error RX1OVR: receive buffer 1 overflow");
+    }
+
+    // if (u8ErrorFlag & MCP2515::EFLG_RX0OVR)
+    //{
+    //     Serial.println("CanShield error RX0OVR: receive buffer 0 overflow");
+    // }
+
+    if (u8ErrorFlag & MCP2515::EFLG_TXBO)
+    {
+        ESP_LOGE("CanShield", "CanShield error TXBO: bus off");
+    }
+
+    if (u8ErrorFlag & MCP2515::EFLG_TXEP)
+    {
+        ESP_LOGE("CanShield", "CanShield error TXEP: transmit error-passive");
+    }
+
+    if (u8ErrorFlag & MCP2515::EFLG_RXEP)
+    {
+        ESP_LOGE("CanShield", "CanShield error RXEP: receive error-passive");
+    }
+
+    if (u8ErrorFlag & MCP2515::EFLG_TXWAR)
+    {
+        ESP_LOGE("CanShield", "CanShield error TXWAR: transmit error warning");
+    }
+
+    if (u8ErrorFlag & MCP2515::EFLG_RXWAR)
+    {
+        ESP_LOGE("CanShield", "CanShield error RXWAR: receive error warning");
+    }
+
+    if (u8ErrorFlag & MCP2515::EFLG_EWARN)
+    {
+        ESP_LOGE("CanShield", "CanShield error EWARN: error warning");
+    }
+}
+
 void rotateStringLeft(char *str, int n)
 {
     int len = strlen(str);
@@ -13,96 +57,5 @@ void rotateStringLeft(char *str, int n)
     {
         str[i] = str[i + n]; // shift remaining characters to the left
     }
-    // memcpy(&str[(len - n) - 1], temp, n); // copy temp to the end of str
     memcpy(&str[(len - n)], temp, n + 1); // copy temp to the end of str
-}
-
-void framePrint(can_frame *f)
-{
-    printf("%d %02X:", millis(), f->can_id);
-    for (int i = 0; i < f->can_dlc; i++)
-    {
-        printf("%02X", f->data[i]);
-    }
-    printf("\n");
-}
-
-void utf8_to_sid(char *str)
-{
-    int i = 0, j = 0;
-    while (str[i])
-    {
-        if (str[i] == 0xC3)
-        { // check for the first byte of a 2-byte UTF-8 character
-            switch (str[i + 1])
-            {
-            case 0xA5: // å
-                str[j] = 0x10;
-                i += 2;
-                break;
-            case 0xA8: // è
-                str[j] = 0xE8;
-                i += 2;
-                break;
-            case 0xA9: // é
-                str[j] = 0xE9;
-                i += 2;
-                break;
-            case 0x85: // Å
-                str[j] = 0xE1;
-                i += 2;
-                break;
-            case 0x86: // Æ
-                str[j] = 0xE1;
-                i += 2;
-                break;
-            case 0xA1: // á
-                str[j] = 0x0F;
-                i += 2;
-                break;
-            case 0xA4: // ä
-                str[j] = 0x11;
-                i += 2;
-                break;
-            case 0x84: // Ä
-                str[j] = 0xD1;
-                i += 2;
-                break;
-            case 0xB6: // ö
-                str[j] = 0x12;
-                i += 2;
-                break;
-            case 0x96: // Ö
-                str[j] = 0xD7;
-                i += 2;
-                break;
-            case 0xBC: // ü
-                str[j] = 0x13;
-                i += 2;
-                break;
-            case 0x9C: // Ü
-                str[j] = 0xD9;
-                i += 2;
-                break;
-            case 0xB8: // ø
-                str[j] = 0xF8;
-                i += 2;
-                break;
-            case 0x98: // Ø
-                str[j] = 0xD8;
-                i += 2;
-                break;
-            default:
-                str[j] = str[i];
-                i++;
-            }
-        }
-        else
-        {
-            str[j] = str[i];
-            i++;
-        }
-        j++;
-    }
-    str[j] = '\0'; // add null terminator
 }
