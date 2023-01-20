@@ -4,7 +4,7 @@
 // void CAN_SEND_Control_Task(void *params);
 void audio_state_callback(esp_a2d_audio_state_t state, void *data);
 void avrc_metadata_callback(uint8_t data1, const uint8_t *data2);
-void checkErr(MCP2515 mcp2515);
+void checkErr(MCP2515 *mcp2515);
 void connection_state_callback(esp_a2d_connection_state_t state, void *p_param);
 void frameHandler(void *params);
 void framePrint(can_frame *f);

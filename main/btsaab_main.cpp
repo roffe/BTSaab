@@ -11,7 +11,9 @@
 #include "esp_log.h"
 #include "btsaab.h"
 #include <pthread.h>
-#include "utf_convert.h"
+// #include "utf_convert.h"
+
+// #include "CANHandler.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
@@ -48,6 +50,7 @@ BluetoothA2DPSink a2dp_sink;
 pthread_mutex_t canMutex;
 spi_device_handle_t spi;
 MCP2515 mcp2515(&spi);
+// CANHandler canHandler;
 
 xQueueHandle interruptQueue = xQueueCreate(5, sizeof(int));
 xQueueHandle canQueue = xQueueCreate(10, sizeof(can_frame));
@@ -66,6 +69,69 @@ char overrideMessage[20 + 1];
 volatile uint8_t disp_rotate = 0;
 
 TaskHandle_t xHandle;
+
+/*
+callback_t buttonCB = {
+    .id = 0x290,
+    .callback = buttonsHandler,
+};
+
+callback_t customCB = {
+    .id = 0x069,
+    .callback = customHandler,
+};
+
+
+void buttonsHandler(can_frame *frame)
+{
+    if (frame->data[5] == 0xC0) // holding CLEAR and SET
+    {
+    }
+    if (frame->data[5] == 0xA0) // holding CLEAR and -
+    {
+        esp_restart(); // reset the ESP32
+    }
+}
+
+void customHandler(can_frame *frame)
+{
+    if (frame->data[0] & 0x01)
+    {
+        a2dp_sink.next();
+        return;
+    }
+    if (frame->data[0] & 0x02)
+    {
+        a2dp_sink.previous();
+        return;
+    }
+    if (frame->data[0] & 0x04)
+    {
+        a2dp_sink.fast_forward();
+        return;
+    }
+    if (frame->data[0] & 0x08)
+    {
+        a2dp_sink.rewind();
+        return;
+    }
+    if (frame->data[0] & 0x10)
+    {
+        a2dp_sink.pause();
+        return;
+    }
+    if (frame->data[0] & 0x20)
+    {
+        a2dp_sink.play();
+        return;
+    }
+    if (frame->data[0] & 0x40)
+    {
+        a2dp_sink.stop();
+        return;
+    }
+}
+*/
 
 extern "C" void app_main(void)
 {
@@ -150,7 +216,7 @@ void interruptHandler(void *params)
 
                     if ((irq & MCP2515::CANINTF_ERRIF) || (irq & MCP2515::CANINTF_MERRF))
                     {
-                        checkErr(mcp2515);
+                        checkErr(&mcp2515);
                         mcp2515.clearERRIF();
                         mcp2515.clearMERR();
                     }

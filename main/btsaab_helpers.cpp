@@ -2,9 +2,9 @@
 #include "btsaab.h"
 #include "string.h"
 
-void checkErr(MCP2515 mcp2515)
+void checkErr(MCP2515 *mcp2515)
 {
-    uint8_t u8ErrorFlag = mcp2515.getErrorFlags();
+    uint8_t u8ErrorFlag = mcp2515->getErrorFlags();
     if (u8ErrorFlag & MCP2515::EFLG_RX1OVR)
     {
         ESP_LOGE("CanShield", "CanShield error RX1OVR: receive buffer 1 overflow");

@@ -36,7 +36,12 @@
         "cmath": "cpp",
         "chrono": "cpp",
         "random": "cpp",
-        "type_traits": "cpp"
+        "type_traits": "cpp",
+        "cstdint": "cpp",
+        "new": "cpp",
+        "iostream": "cpp",
+        "future": "cpp",
+        "typeinfo": "cpp"
     },
     "cmake.configureOnOpen": false
 }
